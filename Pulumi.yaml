@@ -1,0 +1,90 @@
+name: pulumi-bastion-host
+runtime: yaml
+description: A Pulumi program which creates a bastion host capable of connecting to security group via port 5432
+
+configuration:
+  aws:region:
+    type: String
+  aws:profile:
+    type: String
+variables:
+  ami:
+    Fn::Invoke:
+      Function: aws:ec2:getAmi
+      Arguments:
+        owners:
+          - 137112412989 #AWS
+        mostRecent: true
+        filters:
+          - name: name
+            values: 
+              - amzn2-ami-kernel-5.10-hvm-*
+      Returns: id
+  
+  vpcId:
+    Fn::StackReference:
+      - team-ce/infrastructure-go/infra
+      - vpcId
+
+  dbSgId:
+    Fn::StackReference:
+      - team-ce/infrastructure-go/infra
+      - dbSecurityGroupId
+
+  publicSubnetIds:
+    Fn::StackReference:
+      - team-ce/infrastructure-go/infra
+      - publicSubnetIds
+
+resources:
+  bastionSg:
+    type: aws:ec2:SecurityGroup
+    properties:
+      vpcId: ${vpcId}
+      ingress:
+        - protocol: tcp
+          fromPort: 22
+          toPort: 22
+          cidrBlocks:
+            - 0.0.0.0/0
+      egress:
+        - protocol: -1
+          fromPort: 0
+          toPort: 0
+          cidrBlocks:
+            - 0.0.0.0/0
+
+  dbSgAccess:
+    type: aws:ec2:SecurityGroupRule
+    properties:
+      type: ingress
+      fromPort: 5432
+      toPort: 5432
+      protocol: tcp
+      securityGroupId: ${dbSgId}
+      sourceSecurityGroupId: ${bastionSg.id}
+
+  sshKey:
+    type: tls:PrivateKey
+    properties:
+      algorithm: RSA
+
+  awsKey:
+    type: aws:ec2:KeyPair
+    properties:
+      publicKey: ${sshKey.publicKeyOpenssh}
+
+  bastionInstance:
+    type: aws:ec2:Instance
+    properties:
+      instanceType: t3.micro
+      ami: ${ami.id}
+      subnetId: ${publicSubnetIds[0]}
+      vpcSecurityGroupIds:
+        - ${bastionSg.id}
+      associatePublicIpAddress: true
+      keyName: ${awsKey.keyName}
+
+outputs: 
+  sshPrivateKey: ${sshKey.privateKeyPem}
+  bastionIp: ${bastionInstance.publicIp}
